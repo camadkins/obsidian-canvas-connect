@@ -1,0 +1,21 @@
+{
+  "name": "obsidian-canvas-enhancer",
+  "version": "1.0.0",
+  "description": "Enhances the Canvas view by dynamically updating how connection lines anchor between nodes",
+  "main": "main.js",
+  "scripts": {
+    "dev": "tsc -watch",
+    "build": "tsc"
+  },
+  "keywords": ["obsidian", "plugin", "canvas"],
+  "author": "Cameron Adkins",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "typescript": "^5.2.2"
+  },
+  "dependencies": {
+    "obsidian": "^1.5.0",
+    "tslib": "^2.6.2"
+  }
+}
