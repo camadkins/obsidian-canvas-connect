@@ -6,9 +6,6 @@
 	"description": "Automatically updates Canvas connection anchors based on node position, with smart routing and visual feedback.",
 	"author": "camadkins",
 	"authorUrl": "https://github.com/camadkins",
-	"fundingUrl": {
-		"GitHub Sponsor": "https://github.com/sponsors/camadkins"
-	},
 	"main": "main.js",
 	"isDesktopOnly": false
 }
