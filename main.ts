@@ -1,26 +1,10 @@
 import { Plugin, PluginSettingTab, App, Setting, Notice } from 'obsidian';
+import { CanvasNodeData, CanvasEdgeData, CanvasData, NodeSide } from "obsidian/canvas";
 
 interface CanvasConnectSettings {
 	enableDynamicAnchors: boolean;
 	optimizeAllCanvases: boolean;
 	enableVisualFeedback: boolean;
-}
-
-interface CanvasNode {
-	id: string;
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-}
-
-interface CanvasEdge {
-	id: string;
-	fromNode: string;
-	toNode: string;
-	fromSide?: string;
-	toSide?: string;
-	color?: string;
 }
 
 const DEFAULT_SETTINGS: CanvasConnectSettings = {
@@ -29,7 +13,7 @@ const DEFAULT_SETTINGS: CanvasConnectSettings = {
 	enableVisualFeedback: true
 };
 
-export default class CanvasConnectPlugin extends Plugin /* formerly CanvasConnectPlugin */ {
+export default class CanvasConnectPlugin extends Plugin {
 	settings: CanvasConnectSettings;
 	private animationFrame: number | null = null;
 	private lastNodePositions: Record<string, { x: number; y: number }> = {};
@@ -41,9 +25,9 @@ export default class CanvasConnectPlugin extends Plugin /* formerly CanvasConnec
 
 		this.addCommand({
 			id: 'optimize-canvas-connections',
-			name: 'Optimize Canvas Connections',
+			name: 'Optimize Canvas connections',
 			callback: () => {
-				new Notice("Optimizing canvas connections");
+				new Notice("Optimizing Canvas connections");
 				this.optimizeAllConnections(this.settings.optimizeAllCanvases);
 			}
 		});
@@ -76,14 +60,14 @@ export default class CanvasConnectPlugin extends Plugin /* formerly CanvasConnec
 				return;
 			}
 
-			const canvas = (leaf.view as any).canvas;
+			const canvas = (leaf.view as any).canvas;~
 			if (!canvas?.data?.nodes) {
 				this.animationFrame = requestAnimationFrame(monitor);
 				return;
 			}
 
 			let changed = false;
-			for (const node of canvas.data.nodes as CanvasNode[]) {
+			for (const node of canvas.data.nodes as CanvasNodeData[]) {
 				const last = this.lastNodePositions[node.id];
 				if (!last || last.x !== node.x || last.y !== node.y) {
 					changed = true;
@@ -94,7 +78,7 @@ export default class CanvasConnectPlugin extends Plugin /* formerly CanvasConnec
 			if (changed) {
 				this.optimizeAllConnections(false);
 				this.lastNodePositions = Object.fromEntries(
-					canvas.data.nodes.map((n: CanvasNode) => [n.id, { x: n.x, y: n.y }])
+					canvas.data.nodes.map((n: CanvasNodeData) => [n.id, { x: n.x, y: n.y }])
 				);
 			}
 
@@ -125,9 +109,9 @@ export default class CanvasConnectPlugin extends Plugin /* formerly CanvasConnec
 			}
 
 			const newData = structuredClone(canvas.data);
-			const nodeMap = new Map<string, CanvasNode>(newData.nodes.map((n: CanvasNode) => [n.id, n]));
+			const nodeMap = new Map<string, CanvasNodeData>(newData.nodes.map((n: CanvasNodeData) => [n.id, n]));
 
-			for (const edge of newData.edges as CanvasEdge[]) {
+			for (const edge of newData.edges as CanvasEdgeData[]) {
 				const fromNode = nodeMap.get(edge.fromNode);
 				const toNode = nodeMap.get(edge.toNode);
 
@@ -173,7 +157,7 @@ export default class CanvasConnectPlugin extends Plugin /* formerly CanvasConnec
 			canvas.requestSave?.();
 		}
 
-		new Notice(`Optimized connections on ${leaves.length} canvas${leaves.length !== 1 ? 'es' : ''}`);
+		new Notice(`Optimized connections on ${leaves.length} Canvas${leaves.length !== 1 ? 'es' : ''}`);
 	}
 }
 
@@ -188,7 +172,6 @@ class CanvasConnectSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-		containerEl.createEl('h2', { text: 'Canvas Connect Settings' });
 		new Setting(containerEl)
 			.setName('Enable dynamic anchors')
 			.setDesc('Automatically adjust connection anchors as nodes are moved')
@@ -217,7 +200,7 @@ class CanvasConnectSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 		containerEl.createEl('p', {
-			text: 'You can also manually optimize all connections using the "Optimize Canvas Connections" command.'
+			text: 'You can also manually optimize all connections using the "Optimize Canvas connections" command.'
 		});
 	}
 }
