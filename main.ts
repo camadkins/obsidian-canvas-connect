@@ -28,7 +28,7 @@ export default class CanvasConnectPlugin extends Plugin {
 			name: 'Optimize Canvas connections',
 			callback: () => {
 				new Notice("Optimizing Canvas connections");
-				this.optimizeAllConnections(this.settings.optimizeAllCanvases);
+				this.optimizeAllConnections(this.settings.optimizeAllCanvases, true);
 			}
 		});
 
@@ -76,7 +76,7 @@ export default class CanvasConnectPlugin extends Plugin {
 			}
 
 			if (changed) {
-				this.optimizeAllConnections(false);
+				this.optimizeAllConnections(false, false);
 				this.lastNodePositions = Object.fromEntries(
 					canvas.data.nodes.map((n: CanvasNodeData) => [n.id, { x: n.x, y: n.y }])
 				);
@@ -88,7 +88,7 @@ export default class CanvasConnectPlugin extends Plugin {
 		this.animationFrame = requestAnimationFrame(monitor);
 	}
 
-	optimizeAllConnections(all: boolean) {
+	optimizeAllConnections(all: boolean, showNotice: boolean = true) {
 		const recentLeaf = this.app.workspace.getMostRecentLeaf();
 		const leaves = all
 			? this.app.workspace.getLeavesOfType("canvas")
@@ -97,7 +97,9 @@ export default class CanvasConnectPlugin extends Plugin {
 				: [];
 
 		if (leaves.length === 0) {
-			new Notice("No open Canvas views found");
+			if (showNotice) {
+				new Notice("No open Canvas views found");
+			}
 			return;
 		}
 
@@ -163,7 +165,9 @@ export default class CanvasConnectPlugin extends Plugin {
 			}
 		}
 
-		new Notice(`Optimized connections on ${leaves.length} Canvas${leaves.length !== 1 ? 'es' : ''}`);
+		if (showNotice) {
+			new Notice(`Optimized connections on ${leaves.length} Canvas${leaves.length !== 1 ? 'es' : ''}`);
+		}
 	}
 }
 
