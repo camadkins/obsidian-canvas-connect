@@ -1,5 +1,5 @@
 import { Plugin, PluginSettingTab, App, Setting, Notice } from 'obsidian';
-import { CanvasNodeData, CanvasEdgeData, CanvasData, NodeSide } from "obsidian/canvas";
+import { CanvasNodeData, CanvasData, CanvasEdgeData } from "obsidian/canvas";
 
 interface CanvasConnectSettings {
 	enableDynamicAnchors: boolean;
@@ -60,8 +60,8 @@ export default class CanvasConnectPlugin extends Plugin {
 				return;
 			}
 
-			const canvas = (leaf.view as any).canvas;~
-			if (!canvas?.data?.nodes) {
+			const canvas = (leaf.view as any).canvas;
+			if (!canvas || !canvas.data || !canvas.data.nodes) {
 				this.animationFrame = requestAnimationFrame(monitor);
 				return;
 			}
@@ -97,13 +97,13 @@ export default class CanvasConnectPlugin extends Plugin {
 				: [];
 
 		if (leaves.length === 0) {
-			new Notice("No open canvas views found");
+			new Notice("No open Canvas views found");
 			return;
 		}
 
 		for (const leaf of leaves) {
 			const canvas = (leaf.view as any).canvas;
-			if (!canvas?.data || typeof canvas.setData !== 'function') {
+			if (!canvas || !canvas.data || typeof canvas.setData !== 'function') {
 				console.warn("[Canvas Connect] Missing canvas data or setData method");
 				continue;
 			}
@@ -147,14 +147,20 @@ export default class CanvasConnectPlugin extends Plugin {
 					setTimeout(() => {
 						edge.color = undefined;
 						canvas.setData(newData);
-						canvas.requestFrame?.();
+						if (canvas.requestFrame) {
+							canvas.requestFrame();
+						}
 					}, 800);
 				}
 			}
 
 			canvas.setData(newData);
-			canvas.requestFrame?.();
-			canvas.requestSave?.();
+			if (canvas.requestFrame) {
+				canvas.requestFrame();
+			}
+			if (canvas.requestSave) {
+				canvas.requestSave();
+			}
 		}
 
 		new Notice(`Optimized connections on ${leaves.length} Canvas${leaves.length !== 1 ? 'es' : ''}`);
