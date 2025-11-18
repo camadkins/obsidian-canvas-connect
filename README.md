@@ -14,13 +14,7 @@ Canvas Connect is an Obsidian plugin that enhances the Canvas experience by inte
 
 ## Installation
 
-### Using BRAT
-
-1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin
-2. Go to BRAT settings and add the beta plugin with this repository URL:
-   ```
-   https://github.com/camadkins/obsidian-canvas-connect
-   ```
+1. Install via Community plugins [here](https://obsidian.md/plugins?id=canvas-connect)
 3. Enable Canvas Connect in the Community Plugins section
 
 ## Usage
