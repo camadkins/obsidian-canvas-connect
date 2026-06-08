@@ -17,6 +17,8 @@ export default class CanvasConnectPlugin extends Plugin {
 	settings: CanvasConnectSettings;
 	private animationFrame: number | null = null;
 	private lastNodePositions: Record<string, { x: number; y: number }> = {};
+	private glowOriginalColors: Record<string, string | undefined> = {};
+	private glowTimeouts: Set<number> = new Set();
 
 	async onload() {
 		console.log("[Canvas Connect] Plugin loaded");
@@ -37,6 +39,8 @@ export default class CanvasConnectPlugin extends Plugin {
 
 	onunload() {
 		if (this.animationFrame !== null) cancelAnimationFrame(this.animationFrame);
+		for (const id of this.glowTimeouts) window.clearTimeout(id);
+		this.glowTimeouts.clear();
 	}
 
 	async loadSettings() {
@@ -145,14 +149,26 @@ export default class CanvasConnectPlugin extends Plugin {
 				}
 
 				if (this.settings.enableVisualFeedback && (oldFrom !== edge.fromSide || oldTo !== edge.toSide)) {
+					// Fix #2 (thanks @Chentasko for the report): remember each edge's real color so the glow restores it instead of clearing to gray
+					const edgeId = edge.id;
+					if (!(edgeId in this.glowOriginalColors)) {
+						this.glowOriginalColors[edgeId] = edge.color;
+					}
 					edge.color = '#ff9900';
-					setTimeout(() => {
-						edge.color = undefined;
+					const timeoutId = window.setTimeout(() => {
+						this.glowTimeouts.delete(timeoutId);
+						if (!(edgeId in this.glowOriginalColors)) return;
+						edge.color = this.glowOriginalColors[edgeId];
+						delete this.glowOriginalColors[edgeId];
 						canvas.setData(newData);
 						if (canvas.requestFrame) {
 							canvas.requestFrame();
 						}
+						if (canvas.requestSave) {
+							canvas.requestSave();
+						}
 					}, 800);
+					this.glowTimeouts.add(timeoutId);
 				}
 			}
 
