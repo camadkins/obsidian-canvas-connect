@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Menu } from 'obsidian';
 import { CanvasNodeData, CanvasData, CanvasEdgeData } from "obsidian/canvas";
 
 interface CanvasConnectSettings {
@@ -33,6 +33,19 @@ export default class CanvasConnectPlugin extends Plugin {
 				this.optimizeAllConnections(this.settings.optimizeAllCanvases, true);
 			}
 		});
+
+		// Feature #4 (thanks @Bluemandan for the request): right-click a node to copy its id. canvas:node-menu isn't in the public typings, hence the cast
+		this.registerEvent(
+			(this.app.workspace as any).on("canvas:node-menu", (menu: Menu, node: { id: string }) => {
+				menu.addItem(item => item
+					.setTitle("Copy node ID")
+					.setIcon("copy")
+					.onClick(async () => {
+						await navigator.clipboard.writeText(node.id);
+						new Notice("Node ID copied");
+					}));
+			})
+		);
 
 		this.startMonitoringCanvas();
 	}
