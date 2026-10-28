@@ -1,24 +1,33 @@
 import { Plugin, PluginSettingTab, App, Setting, Notice, Menu } from 'obsidian';
-import { CanvasNodeData, CanvasData, CanvasEdgeData } from "obsidian/canvas";
+import { CanvasNodeData, CanvasData, CanvasEdgeData, NodeSide } from "obsidian/canvas";
 
 interface CanvasConnectSettings {
 	enableDynamicAnchors: boolean;
 	optimizeAllCanvases: boolean;
 	enableVisualFeedback: boolean;
+	lockedEdges: string[];
 }
 
 const DEFAULT_SETTINGS: CanvasConnectSettings = {
 	enableDynamicAnchors: true,
 	optimizeAllCanvases: false,
-	enableVisualFeedback: true
+	enableVisualFeedback: true,
+	lockedEdges: []
 };
+
+const GLOW_COLOR = '#ff9900';
+const GLOW_MS = 800;
+
+type Geometry = { x: number; y: number; width: number; height: number };
+type Glow = { canvas: any; color: string | undefined; timeout: number };
 
 export default class CanvasConnectPlugin extends Plugin {
 	settings: CanvasConnectSettings;
 	private animationFrame: number | null = null;
-	private lastNodePositions: Record<string, { x: number; y: number }> = {};
-	private glowOriginalColors: Record<string, string | undefined> = {};
-	private glowTimeouts: Set<number> = new Set();
+	// keyed by the canvas object so each open canvas keeps its own baseline
+	private canvasGeometry = new WeakMap<object, Record<string, Geometry>>();
+	private glows = new Map<string, Glow>();
+	private lockedEdges = new Set<string>();
 
 	async onload() {
 		console.log("[Canvas Connect] Plugin loaded");
@@ -47,17 +56,35 @@ export default class CanvasConnectPlugin extends Plugin {
 			})
 		);
 
+		// Right-click a connection to lock its anchors so the optimizer leaves a hand-placed edge alone
+		this.registerEvent(
+			(this.app.workspace as any).on("canvas:edge-menu", (menu: Menu, edge: { id: string }) => {
+				const locked = this.lockedEdges.has(edge.id);
+				menu.addItem(item => item
+					.setTitle(locked ? "Unlock anchors" : "Lock anchors")
+					.setIcon(locked ? "unlock" : "lock")
+					.onClick(async () => {
+						if (locked) this.lockedEdges.delete(edge.id);
+						else this.lockedEdges.add(edge.id);
+						this.settings.lockedEdges = [...this.lockedEdges];
+						await this.saveSettings();
+						new Notice(locked ? "Anchors unlocked" : "Anchors locked");
+					}));
+			})
+		);
+
 		this.startMonitoringCanvas();
 	}
 
 	onunload() {
 		if (this.animationFrame !== null) cancelAnimationFrame(this.animationFrame);
-		for (const id of this.glowTimeouts) window.clearTimeout(id);
-		this.glowTimeouts.clear();
+		// put any edge still glowing back to its real color so orange never gets saved
+		for (const edgeId of [...this.glows.keys()]) this.restoreGlow(edgeId);
 	}
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.lockedEdges = new Set(this.settings.lockedEdges);
 	}
 
 	async saveSettings() {
@@ -66,40 +93,31 @@ export default class CanvasConnectPlugin extends Plugin {
 
 	startMonitoringCanvas() {
 		const monitor = () => {
-			if (!this.settings.enableDynamicAnchors) {
-				this.animationFrame = requestAnimationFrame(monitor);
-				return;
-			}
+			this.animationFrame = requestAnimationFrame(monitor);
+			if (!this.settings.enableDynamicAnchors) return;
 
 			const leaf = this.app.workspace.getMostRecentLeaf();
-			if (!leaf || leaf.view.getViewType() !== "canvas") {
-				this.animationFrame = requestAnimationFrame(monitor);
-				return;
-			}
+			if (!leaf || leaf.view.getViewType() !== "canvas") return;
 
 			const canvas = (leaf.view as any).canvas;
-			if (!canvas || !canvas.data || !canvas.data.nodes) {
-				this.animationFrame = requestAnimationFrame(monitor);
+			if (!canvas || !canvas.data || !canvas.data.nodes) return;
+
+			const nodes = canvas.data.nodes as CanvasNodeData[];
+			const last = this.canvasGeometry.get(canvas);
+			// first time we see a canvas just record it, opening or switching tabs shouldn't rewrite the file
+			if (!last) {
+				this.canvasGeometry.set(canvas, snapshotGeometry(nodes));
 				return;
 			}
 
-			let changed = false;
-			for (const node of canvas.data.nodes as CanvasNodeData[]) {
-				const last = this.lastNodePositions[node.id];
-				if (!last || last.x !== node.x || last.y !== node.y) {
-					changed = true;
-					break;
-				}
-			}
+			const moved = nodes.some(n => {
+				const g = last[n.id];
+				return !g || g.x !== n.x || g.y !== n.y || g.width !== n.width || g.height !== n.height;
+			});
+			if (!moved) return;
 
-			if (changed) {
-				this.optimizeAllConnections(false, false);
-				this.lastNodePositions = Object.fromEntries(
-					canvas.data.nodes.map((n: CanvasNodeData) => [n.id, { x: n.x, y: n.y }])
-				);
-			}
-
-			this.animationFrame = requestAnimationFrame(monitor);
+			this.optimizeCanvas(canvas);
+			this.canvasGeometry.set(canvas, snapshotGeometry(canvas.data.nodes));
 		};
 
 		this.animationFrame = requestAnimationFrame(monitor);
@@ -126,78 +144,98 @@ export default class CanvasConnectPlugin extends Plugin {
 				console.warn("[Canvas Connect] Missing canvas data or setData method");
 				continue;
 			}
-
-			const newData = structuredClone(canvas.data);
-			const nodeMap = new Map<string, CanvasNodeData>(newData.nodes.map((n: CanvasNodeData) => [n.id, n]));
-
-			for (const edge of newData.edges as CanvasEdgeData[]) {
-				const fromNode = nodeMap.get(edge.fromNode);
-				const toNode = nodeMap.get(edge.toNode);
-
-				if (!fromNode || !toNode) continue;
-
-				const fromCenterX = fromNode.x + fromNode.width / 2;
-				const fromCenterY = fromNode.y + fromNode.height / 2;
-				const toCenterX = toNode.x + toNode.width / 2;
-				const toCenterY = toNode.y + toNode.height / 2;
-
-				const deltaX = toCenterX - fromCenterX;
-				const deltaY = toCenterY - fromCenterY;
-
-				const absX = Math.abs(deltaX);
-				const absY = Math.abs(deltaY);
-
-				const oldFrom = edge.fromSide;
-				const oldTo = edge.toSide;
-
-				if (absX > absY * 1.5) {
-					edge.fromSide = deltaX > 0 ? "right" : "left";
-					edge.toSide = deltaX > 0 ? "left" : "right";
-				} else if (absY > absX * 1.5) {
-					edge.fromSide = deltaY > 0 ? "bottom" : "top";
-					edge.toSide = deltaY > 0 ? "top" : "bottom";
-				} else {
-					edge.fromSide = deltaX > 0 ? "right" : "left";
-					edge.toSide = deltaY > 0 ? "top" : "bottom";
-				}
-
-				if (this.settings.enableVisualFeedback && (oldFrom !== edge.fromSide || oldTo !== edge.toSide)) {
-					// Fix #2 (thanks @Chentasko for the report): remember each edge's real color so the glow restores it instead of clearing to gray
-					const edgeId = edge.id;
-					if (!(edgeId in this.glowOriginalColors)) {
-						this.glowOriginalColors[edgeId] = edge.color;
-					}
-					edge.color = '#ff9900';
-					const timeoutId = window.setTimeout(() => {
-						this.glowTimeouts.delete(timeoutId);
-						if (!(edgeId in this.glowOriginalColors)) return;
-						edge.color = this.glowOriginalColors[edgeId];
-						delete this.glowOriginalColors[edgeId];
-						canvas.setData(newData);
-						if (canvas.requestFrame) {
-							canvas.requestFrame();
-						}
-						if (canvas.requestSave) {
-							canvas.requestSave();
-						}
-					}, 800);
-					this.glowTimeouts.add(timeoutId);
-				}
-			}
-
-			canvas.setData(newData);
-			if (canvas.requestFrame) {
-				canvas.requestFrame();
-			}
-			if (canvas.requestSave) {
-				canvas.requestSave();
-			}
+			this.optimizeCanvas(canvas);
 		}
 
 		if (showNotice) {
 			new Notice(`Optimized connections on ${leaves.length} Canvas${leaves.length !== 1 ? 'es' : ''}`);
 		}
 	}
+
+	// Works out new anchors first and only touches the canvas when at least one edge actually changes sides
+	optimizeCanvas(canvas: any) {
+		const data = canvas.data as CanvasData;
+		const nodeMap = new Map<string, CanvasNodeData>(data.nodes.map(n => [n.id, n]));
+		const updates = new Map<string, { fromSide: NodeSide; toSide: NodeSide }>();
+
+		for (const edge of data.edges) {
+			if (this.lockedEdges.has(edge.id)) continue;
+			const fromNode = nodeMap.get(edge.fromNode);
+			const toNode = nodeMap.get(edge.toNode);
+			if (!fromNode || !toNode) continue;
+
+			const sides = pickSides(fromNode, toNode);
+			if (sides.fromSide !== edge.fromSide || sides.toSide !== edge.toSide) {
+				updates.set(edge.id, sides);
+			}
+		}
+
+		if (updates.size === 0) return;
+
+		const newData = structuredClone(data);
+		for (const edge of newData.edges as CanvasEdgeData[]) {
+			const sides = updates.get(edge.id);
+			if (!sides) continue;
+			edge.fromSide = sides.fromSide;
+			edge.toSide = sides.toSide;
+			if (this.settings.enableVisualFeedback) this.startGlow(canvas, edge);
+		}
+
+		canvas.setData(newData);
+		if (canvas.requestFrame) canvas.requestFrame();
+		// while an edge is glowing the save waits for restoreGlow, so the orange never lands on disk
+		if (!this.settings.enableVisualFeedback && canvas.requestSave) canvas.requestSave();
+	}
+
+	private startGlow(canvas: any, edge: CanvasEdgeData) {
+		// Fix #2 (thanks @Chentasko for the report): remember each edge's real color so the glow restores it instead of clearing to gray
+		const existing = this.glows.get(edge.id);
+		if (existing) window.clearTimeout(existing.timeout);
+		const color = existing ? existing.color : edge.color;
+		edge.color = GLOW_COLOR;
+		const timeout = window.setTimeout(() => this.restoreGlow(edge.id), GLOW_MS);
+		this.glows.set(edge.id, { canvas, color, timeout });
+	}
+
+	// Restores against the canvas as it is now, not a copy from when the glow started, so moves and edits made in between survive
+	private restoreGlow(edgeId: string) {
+		const glow = this.glows.get(edgeId);
+		if (!glow) return;
+		window.clearTimeout(glow.timeout);
+		this.glows.delete(edgeId);
+
+		const { canvas } = glow;
+		if (!canvas || !canvas.data) return;
+		const data = structuredClone(canvas.data) as CanvasData;
+		const edge = data.edges.find(e => e.id === edgeId);
+		if (!edge || edge.color !== GLOW_COLOR) return;
+
+		if (glow.color === undefined) delete edge.color;
+		else edge.color = glow.color;
+
+		canvas.setData(data);
+		if (canvas.requestFrame) canvas.requestFrame();
+		if (canvas.requestSave) canvas.requestSave();
+	}
+}
+
+function snapshotGeometry(nodes: CanvasNodeData[]): Record<string, Geometry> {
+	return Object.fromEntries(nodes.map(n => [n.id, { x: n.x, y: n.y, width: n.width, height: n.height }]));
+}
+
+function pickSides(fromNode: CanvasNodeData, toNode: CanvasNodeData): { fromSide: NodeSide; toSide: NodeSide } {
+	const deltaX = (toNode.x + toNode.width / 2) - (fromNode.x + fromNode.width / 2);
+	const deltaY = (toNode.y + toNode.height / 2) - (fromNode.y + fromNode.height / 2);
+	const absX = Math.abs(deltaX);
+	const absY = Math.abs(deltaY);
+
+	if (absX > absY * 1.5) {
+		return deltaX > 0 ? { fromSide: "right", toSide: "left" } : { fromSide: "left", toSide: "right" };
+	}
+	if (absY > absX * 1.5) {
+		return deltaY > 0 ? { fromSide: "bottom", toSide: "top" } : { fromSide: "top", toSide: "bottom" };
+	}
+	return { fromSide: deltaX > 0 ? "right" : "left", toSide: deltaY > 0 ? "top" : "bottom" };
 }
 
 class CanvasConnectSettingTab extends PluginSettingTab {
