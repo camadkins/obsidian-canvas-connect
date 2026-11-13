@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "dev": "tsc -watch",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "bun test"
   },
   "keywords": [
     "obsidian",
