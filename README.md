@@ -7,7 +7,9 @@ Canvas Connect is an Obsidian plugin that enhances the Canvas experience by inte
 ![gif](https://github.com/user-attachments/assets/a3988d58-f253-470a-9dde-b3940351b0e0)
 
 - Dynamically adjusts connection anchors in real-time as you move nodes
-- Automatically selects the most logical anchor point (top, right, bottom, left) based on node positions
+- Smart routing scores every side pair and picks the cleanest path, steering around other cards and avoiding crossings
+- Anchors hold steady while you drag, so connections don't flicker between sides
+- Quick Connect: connect selected cards from the command palette or a hotkey
 - Provides a command to manually optimize all connections at once
 - Offers visual feedback with a subtle highlight effect on changed connections (optional)
 - Works across all open canvases or just the active one
@@ -26,10 +28,19 @@ The plugin works automatically once enabled:
 - Use the "Optimize connections" command from the Command Palette (Ctrl+P / Cmd+P) to manually trigger optimization
 - Right-click a connection and pick "Lock anchors" to keep the plugin from moving it. Pick "Unlock anchors" to hand it back
 
+### Quick Connect
+
+- Select two cards and run "Connect selected nodes" to connect them. The arrow follows reading order: left to right, or top to bottom when the cards are stacked
+- To connect one card to many: select it, run "Set selected node as connection source", then select the targets and run "Connect selected nodes from source". Pairs that are already connected are skipped
+- Wrong way round? Right-click the connection and pick "Reverse direction", or select connections and run "Reverse selected connections"
+- Bind any of these to a hotkey in Settings > Hotkeys
+
 ## Settings
 
 Canvas Connect can be configured in the plugin settings:
 
+- **Routing**: Smart (default) picks the cleanest path around other cards. Classic uses the original nearest-side rule
+- **Quick Connect arrows**: One way (default), both ways, or no arrows on connections made with Quick Connect
 - **Enable dynamic anchors**: When enabled, connections update in real-time as you move nodes
 - **Enable visual feedback**: Briefly highlights connections when they're optimized
 - **Optimize all open canvases**: Apply optimization to all open Canvas tabs, not just the active one
