@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Menu } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Menu, EventRef, SettingDefinitionItem } from 'obsidian';
 import { CanvasNodeData, CanvasData, CanvasEdgeData, NodeSide } from "obsidian/canvas";
 
 interface CanvasConnectSettings {
@@ -19,7 +19,25 @@ const GLOW_COLOR = '#ff9900';
 const GLOW_MS = 800;
 
 type Geometry = { x: number; y: number; width: number; height: number };
-type Glow = { canvas: any; color: string | undefined; timeout: number };
+
+// The canvas internals we touch. None of this is in the public typings
+interface CanvasLike {
+	data: CanvasData;
+	setData(data: CanvasData): void;
+	requestFrame?(): void;
+	requestSave?(): void;
+}
+
+interface CanvasViewLike {
+	canvas?: CanvasLike;
+}
+
+interface CanvasWorkspace {
+	on(name: "canvas:node-menu", callback: (menu: Menu, node: { id: string }) => void): EventRef;
+	on(name: "canvas:edge-menu", callback: (menu: Menu, edge: { id: string }) => void): EventRef;
+}
+
+type Glow = { canvas: CanvasLike; color: string | undefined; timeout: number };
 
 export default class CanvasConnectPlugin extends Plugin {
 	settings: CanvasConnectSettings;
@@ -29,23 +47,25 @@ export default class CanvasConnectPlugin extends Plugin {
 	private glows = new Map<string, Glow>();
 	private lockedEdges = new Set<string>();
 
+	private get workspace(): CanvasWorkspace {
+		return this.app.workspace as unknown as CanvasWorkspace;
+	}
+
 	async onload() {
-		console.log("[Canvas Connect] Plugin loaded");
 		await this.loadSettings();
 		this.addSettingTab(new CanvasConnectSettingTab(this.app, this));
 
 		this.addCommand({
 			id: 'optimize-canvas-connections',
-			name: 'Optimize Canvas connections',
+			name: 'Optimize connections',
 			callback: () => {
-				new Notice("Optimizing Canvas connections");
 				this.optimizeAllConnections(this.settings.optimizeAllCanvases, true);
 			}
 		});
 
-		// Feature #4 (thanks @Bluemandan for the request): right-click a node to copy its id. canvas:node-menu isn't in the public typings, hence the cast
+		// Feature #4 (thanks @Bluemandan for the request): right-click a node to copy its id. canvas:node-menu isn't in the public typings, see CanvasWorkspace
 		this.registerEvent(
-			(this.app.workspace as any).on("canvas:node-menu", (menu: Menu, node: { id: string }) => {
+			this.workspace.on("canvas:node-menu", (menu: Menu, node: { id: string }) => {
 				menu.addItem(item => item
 					.setTitle("Copy node ID")
 					.setIcon("copy")
@@ -58,7 +78,7 @@ export default class CanvasConnectPlugin extends Plugin {
 
 		// Right-click a connection to lock its anchors so the optimizer leaves a hand-placed edge alone
 		this.registerEvent(
-			(this.app.workspace as any).on("canvas:edge-menu", (menu: Menu, edge: { id: string }) => {
+			this.workspace.on("canvas:edge-menu", (menu: Menu, edge: { id: string }) => {
 				const locked = this.lockedEdges.has(edge.id);
 				menu.addItem(item => item
 					.setTitle(locked ? "Unlock anchors" : "Lock anchors")
@@ -77,7 +97,7 @@ export default class CanvasConnectPlugin extends Plugin {
 	}
 
 	onunload() {
-		if (this.animationFrame !== null) cancelAnimationFrame(this.animationFrame);
+		if (this.animationFrame !== null) window.cancelAnimationFrame(this.animationFrame);
 		// put any edge still glowing back to its real color so orange never gets saved
 		for (const edgeId of [...this.glows.keys()]) this.restoreGlow(edgeId);
 	}
@@ -93,16 +113,16 @@ export default class CanvasConnectPlugin extends Plugin {
 
 	startMonitoringCanvas() {
 		const monitor = () => {
-			this.animationFrame = requestAnimationFrame(monitor);
+			this.animationFrame = window.requestAnimationFrame(monitor);
 			if (!this.settings.enableDynamicAnchors) return;
 
 			const leaf = this.app.workspace.getMostRecentLeaf();
 			if (!leaf || leaf.view.getViewType() !== "canvas") return;
 
-			const canvas = (leaf.view as any).canvas;
+			const canvas = (leaf.view as unknown as CanvasViewLike).canvas;
 			if (!canvas || !canvas.data || !canvas.data.nodes) return;
 
-			const nodes = canvas.data.nodes as CanvasNodeData[];
+			const nodes = canvas.data.nodes;
 			const last = this.canvasGeometry.get(canvas);
 			// first time we see a canvas just record it, opening or switching tabs shouldn't rewrite the file
 			if (!last) {
@@ -120,7 +140,7 @@ export default class CanvasConnectPlugin extends Plugin {
 			this.canvasGeometry.set(canvas, snapshotGeometry(canvas.data.nodes));
 		};
 
-		this.animationFrame = requestAnimationFrame(monitor);
+		this.animationFrame = window.requestAnimationFrame(monitor);
 	}
 
 	optimizeAllConnections(all: boolean, showNotice: boolean = true) {
@@ -139,11 +159,8 @@ export default class CanvasConnectPlugin extends Plugin {
 		}
 
 		for (const leaf of leaves) {
-			const canvas = (leaf.view as any).canvas;
-			if (!canvas || !canvas.data || typeof canvas.setData !== 'function') {
-				console.warn("[Canvas Connect] Missing canvas data or setData method");
-				continue;
-			}
+			const canvas = (leaf.view as unknown as CanvasViewLike).canvas;
+			if (!canvas || !canvas.data || typeof canvas.setData !== 'function') continue;
 			this.optimizeCanvas(canvas);
 		}
 
@@ -153,8 +170,8 @@ export default class CanvasConnectPlugin extends Plugin {
 	}
 
 	// Works out new anchors first and only touches the canvas when at least one edge actually changes sides
-	optimizeCanvas(canvas: any) {
-		const data = canvas.data as CanvasData;
+	optimizeCanvas(canvas: CanvasLike) {
+		const data = canvas.data;
 		const nodeMap = new Map<string, CanvasNodeData>(data.nodes.map(n => [n.id, n]));
 		const updates = new Map<string, { fromSide: NodeSide; toSide: NodeSide }>();
 
@@ -173,7 +190,7 @@ export default class CanvasConnectPlugin extends Plugin {
 		if (updates.size === 0) return;
 
 		const newData = structuredClone(data);
-		for (const edge of newData.edges as CanvasEdgeData[]) {
+		for (const edge of newData.edges) {
 			const sides = updates.get(edge.id);
 			if (!sides) continue;
 			edge.fromSide = sides.fromSide;
@@ -187,7 +204,7 @@ export default class CanvasConnectPlugin extends Plugin {
 		if (!this.settings.enableVisualFeedback && canvas.requestSave) canvas.requestSave();
 	}
 
-	private startGlow(canvas: any, edge: CanvasEdgeData) {
+	private startGlow(canvas: CanvasLike, edge: CanvasEdgeData) {
 		// Fix #2 (thanks @Chentasko for the report): remember each edge's real color so the glow restores it instead of clearing to gray
 		const existing = this.glows.get(edge.id);
 		if (existing) window.clearTimeout(existing.timeout);
@@ -206,7 +223,7 @@ export default class CanvasConnectPlugin extends Plugin {
 
 		const { canvas } = glow;
 		if (!canvas || !canvas.data) return;
-		const data = structuredClone(canvas.data) as CanvasData;
+		const data = structuredClone(canvas.data);
 		const edge = data.edges.find(e => e.id === edgeId);
 		if (!edge || edge.color !== GLOW_COLOR) return;
 
@@ -238,6 +255,14 @@ function pickSides(fromNode: CanvasNodeData, toNode: CanvasNodeData): { fromSide
 	return { fromSide: deltaX > 0 ? "right" : "left", toSide: deltaY > 0 ? "top" : "bottom" };
 }
 
+type ToggleKey = 'enableDynamicAnchors' | 'optimizeAllCanvases' | 'enableVisualFeedback';
+
+const TOGGLES: { key: ToggleKey; name: string; desc: string }[] = [
+	{ key: 'enableDynamicAnchors', name: 'Enable dynamic anchors', desc: 'Automatically adjust connection anchors as nodes are moved' },
+	{ key: 'optimizeAllCanvases', name: 'Optimize all open canvases', desc: 'Run the optimization on every open canvas tab instead of just the active one' },
+	{ key: 'enableVisualFeedback', name: 'Enable visual feedback', desc: 'Highlight updated connections with a glow effect' },
+];
+
 class CanvasConnectSettingTab extends PluginSettingTab {
 	plugin: CanvasConnectPlugin;
 
@@ -246,38 +271,29 @@ class CanvasConnectSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	// Obsidian 1.13+ renders from these and indexes them for settings search
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return TOGGLES.map(t => ({
+			name: t.name,
+			desc: t.desc,
+			control: { type: 'toggle', key: t.key, defaultValue: DEFAULT_SETTINGS[t.key] },
+		}));
+	}
+
+	// Fallback for Obsidian older than 1.13
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-		new Setting(containerEl)
-			.setName('Enable dynamic anchors')
-			.setDesc('Automatically adjust connection anchors as nodes are moved')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.enableDynamicAnchors)
-				.onChange(async (value) => {
-					this.plugin.settings.enableDynamicAnchors = value;
-					await this.plugin.saveSettings();
-				}));
-		new Setting(containerEl)
-			.setName('Optimize all open canvases')
-			.setDesc('Run the optimization on every open canvas tab instead of just the active one')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.optimizeAllCanvases)
-				.onChange(async (value) => {
-					this.plugin.settings.optimizeAllCanvases = value;
-					await this.plugin.saveSettings();
-				}));
-		new Setting(containerEl)
-			.setName('Enable visual feedback')
-			.setDesc('Highlight updated connections with a glow effect')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.enableVisualFeedback)
-				.onChange(async (value) => {
-					this.plugin.settings.enableVisualFeedback = value;
-					await this.plugin.saveSettings();
-				}));
-		containerEl.createEl('p', {
-			text: 'You can also manually optimize all connections using the "Optimize Canvas connections" command.'
-		});
+		for (const t of TOGGLES) {
+			new Setting(containerEl)
+				.setName(t.name)
+				.setDesc(t.desc)
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings[t.key])
+					.onChange(async (value) => {
+						this.plugin.settings[t.key] = value;
+						await this.plugin.saveSettings();
+					}));
+		}
 	}
 }

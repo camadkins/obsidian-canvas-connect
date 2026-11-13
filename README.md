@@ -23,7 +23,7 @@ Canvas Connect is an Obsidian plugin that enhances the Canvas experience by inte
 The plugin works automatically once enabled:
 
 - Move nodes in your Canvas to see connections dynamically update
-- Use the "Optimize Canvas Connections" command from the Command Palette (Ctrl+P / Cmd+P) to manually trigger optimization
+- Use the "Optimize connections" command from the Command Palette (Ctrl+P / Cmd+P) to manually trigger optimization
 - Right-click a connection and pick "Lock anchors" to keep the plugin from moving it. Pick "Unlock anchors" to hand it back
 
 ## Settings
